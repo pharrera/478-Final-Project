@@ -2,26 +2,23 @@
 IMAGE_NAME = neuroguard_dqn
 CONTAINER_NAME = neuroguard_dqn
 
-test:
-	docker-compose run --rm neuroguard python src/tests.py
-
 # Bootstrap: Build the container
 bootstrap:
 	docker-compose build
 
-# Run the training/detection loop
+# Run the training loop (This is "make up")
 up:
 	docker-compose up
 
-# Clean up containers
+# Run the DEMO mode (This is "make demo")
+demo:
+	docker-compose run --rm neuroguard python src/main.py --demo
+
+# Clean up
 clean:
 	docker-compose down
 	docker system prune -f
 
-# Demo: Run a pre-trained model or a quick evaluation loop
-demo:
-	docker-compose run --rm neuroguard python src/main.py --mode demo
-
-# Download dataset (Helper target)
-download-data:
-	@echo "Please manually place NSL-KDD.csv in ./data/ for now."
+# Run Tests
+test:
+	docker-compose run --rm neuroguard python src/tests.py
