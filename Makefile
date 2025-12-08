@@ -2,6 +2,9 @@
 IMAGE_NAME = neuroguard_dqn
 CONTAINER_NAME = neuroguard_dqn
 
+test:
+	docker-compose run --rm neuroguard python src/tests.py
+
 # Bootstrap: Build the container
 bootstrap:
 	docker-compose build

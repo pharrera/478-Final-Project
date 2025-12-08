@@ -4,3 +4,4 @@ torch
 gym
 matplotlib
 scikit-learn
+requests
