@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  neuroguard:
+    build: .
+    container_name: neuroguard_dqn
+    volumes:
+      - ./src:/app/src
+      - ./data:/app/data
+      - ./artifacts:/app/artifacts
+    environment:
+      - PYTHONUNBUFFERED=1
