@@ -7,7 +7,7 @@ import requests
 import random
 import time
 import matplotlib.pyplot as plt
-from sklearn.preprocessing import LabelEncoder, MinMaxScaler
+from sklearn.preprocessing import LabelEncoder, StandardScaler # Changed to StandardScaler
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 from environment import NetworkEnv
 from agent import DQNAgent
@@ -38,13 +38,8 @@ def load_data(dataset_type="kdd"):
             
         # CICIoT2023 Load Logic
         df = pd.read_csv(DATA_PATH_CIC)
-        
-        # 1. Handle Labels
-        # The column is usually 'label'. Benign is 'BenignTraffic'
         y_raw = df['label']
         y = y_raw.apply(lambda x: 0 if x in ['BenignTraffic', 'Benign'] else 1).values
-        
-        # 2. Features (Drop label)
         X_raw = df.drop(['label'], axis=1)
         
     else:
@@ -71,27 +66,26 @@ def load_data(dataset_type="kdd"):
         y = df['label'].apply(lambda x: 0 if x == 'normal' else 1).values
         X_raw = df.drop(['label', 'difficulty'], axis=1)
 
-    # Universal Preprocessing (Encoding & Scaling)
-    # This handles both 41 features (KDD) and 46+ features (CICIoT) automatically
+    # Universal Preprocessing
     le = LabelEncoder()
     for col in X_raw.select_dtypes(include=['object']).columns:
         X_raw[col] = le.fit_transform(X_raw[col])
         
-    scaler = MinMaxScaler()
+    # OPTIMIZATION 2: Use StandardScaler instead of MinMaxScaler
+    scaler = StandardScaler()
     X = scaler.fit_transform(X_raw)
     
     return X, y
 
 def train_mode():
-    # Detect Dataset Flag
     ds_type = "ciciot" if "--ciciot" in sys.argv else "kdd"
     features, labels = load_data(ds_type)
     
-    # Fast Mode vs Full Mode limits
     if "--full" in sys.argv:
         print(f">>> FULL TRAINING ON {ds_type.upper()} ({len(features)} Samples) <<<")
         limit = None
-        episodes = 5
+        # OPTIMIZATION 3: Increased episodes
+        episodes = 20 
         log_interval = 5000
     else:
         print(f">>> FAST MODE ON {ds_type.upper()} (2000 Samples) <<<")
@@ -102,8 +96,6 @@ def train_mode():
     X_train = features[:limit] if limit else features
     y_train = labels[:limit] if limit else labels
     
-    # 1. Train Autoencoder
-    # Dynamic Input Dim: Fits 41 (KDD) or 46 (CICIoT) automatically
     input_dim = X_train.shape[1]
     latent_dim = 20
     print(f"Input Features: {input_dim} -> Latent: {latent_dim}")
@@ -111,7 +103,6 @@ def train_mode():
     X_encoded, ae_model = train_autoencoder(X_train, input_dim, latent_dim)
     torch.save(ae_model.state_dict(), AE_PATH)
     
-    # 2. Train DQN
     env = NetworkEnv(X_encoded, y_train)
     agent = DQNAgent(state_dim=latent_dim, action_dim=2)
     
@@ -152,11 +143,9 @@ def benchmark_mode():
         print("Error: Models not found. Run 'make up' first.")
         return
         
-    # Detect Dataset Flag
     ds_type = "ciciot" if "--ciciot" in sys.argv else "kdd"
     features, labels = load_data(ds_type)
     
-    # Load Models
     device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
     input_dim = features.shape[1]
     
@@ -168,9 +157,7 @@ def benchmark_mode():
     agent.model.load_state_dict(torch.load(DQN_PATH, map_location=device))
     agent.epsilon = 0.0 
     
-    # Benchmark
-    # Use subset for speed if full dataset is massive (CICIoT part files are usually ~200k rows)
-    limit = 10000 if len(features) > 10000 else len(features)
+    limit = 30_000 if len(features) > 30_000 else len(features)
     print(f"Evaluating on {limit} samples from {ds_type.upper()}...")
     
     indices = np.random.choice(len(features), limit, replace=False)
@@ -188,7 +175,6 @@ def benchmark_mode():
         y_pred.append(action)
     end_time = time.time()
     
-    # Metrics
     total_time = end_time - start_time
     avg_latency = (total_time / len(X_test)) * 1000 
     acc = accuracy_score(y_true, y_pred)
