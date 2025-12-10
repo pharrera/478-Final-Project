@@ -22,7 +22,7 @@ os.makedirs(ARTIFACTS_DIR, exist_ok=True)
 
 def load_real_data():
     if not os.path.exists(DATA_PATH):
-        print(f"Downloading NSL-KDD dataset...")
+        print(f"Downloading NSL-KDD dataset from {DATA_URL}...")
         response = requests.get(DATA_URL)
         with open(DATA_PATH, 'wb') as f:
             f.write(response.content)
@@ -43,31 +43,46 @@ def load_real_data():
     df = pd.read_csv(DATA_PATH, names=cols)
     y = df['label'].apply(lambda x: 0 if x == 'normal' else 1).values
     X_raw = df.drop(['label', 'difficulty'], axis=1)
+    
     le = LabelEncoder()
     for col in X_raw.select_dtypes(include=['object']).columns:
         X_raw[col] = le.fit_transform(X_raw[col])
     scaler = MinMaxScaler()
     X = scaler.fit_transform(X_raw)
+    
     return X, y
 
 def train_mode():
     features, labels = load_real_data()
     
-    # SPEED OPTIMIZATION: Reduce limit to 1000 rows and 3 episodes
-    # This ensures "make up" finishes in < 2 minutes
-    limit = 1000  
-    env = NetworkEnv(features[:limit], labels[:limit])
+    # Determine Mode
+    if "--full" in sys.argv:
+        print(">>> RUNNING FULL DATASET TRAINING (25,000+ Rows) <<<")
+        limit = None
+        episodes = 5
+        log_interval = 2000 # Print every 2000 steps
+    else:
+        print(">>> RUNNING FAST MODE (1,000 Rows) <<<")
+        limit = 1000
+        episodes = 3
+        log_interval = 200 # Print more often in fast mode
+
+    X_train = features[:limit] if limit else features
+    y_train = labels[:limit] if limit else labels
+    dataset_size = len(X_train)
+    
+    env = NetworkEnv(X_train, y_train)
     agent = DQNAgent(state_dim=env.n_features, action_dim=env.action_space.n)
     
-    episodes = 3 # Reduced from 5 to meet time limit
     history = [] 
-    
-    print(f"--- STARTING TRAINING ({episodes} Episodes) ---")
+    print(f"--- STARTING TRAINING ({dataset_size} Flows, {episodes} Episodes) ---")
 
     for e in range(episodes):
         state = env.reset()
         total_reward = 0
         done = False
+        step_count = 0
+        
         while not done:
             action = agent.act(state)
             next_state, reward, done, _ = env.step(action)
@@ -76,17 +91,27 @@ def train_mode():
             total_reward += reward
             agent.replay()
             
-        print(f"Episode: {e+1}/{episodes}, Score: {total_reward}, Epsilon: {agent.epsilon:.2f}")
+            step_count += 1
+            
+            # Progress Logging
+            if step_count % log_interval == 0:
+                print(f"[Episode {e+1}] Step {step_count}/{dataset_size} | Reward: {total_reward} | Eps: {agent.epsilon:.2f}")
+                sys.stdout.flush() # Ensure docker prints immediately
+            
+        print(f"--- Episode: {e+1}/{episodes} FINISHED | Total Score: {total_reward} ---")
         history.append({"episode": e + 1, "reward": total_reward})
 
+    # Save
     torch.save(agent.model.state_dict(), MODEL_PATH)
     pd.DataFrame(history).to_csv(f"{ARTIFACTS_DIR}/metrics.csv", index=False)
     
-    # Generate Chart
-    df_hist = pd.DataFrame(history)
-    plt.figure()
-    plt.plot(df_hist['episode'], df_hist['reward'])
-    plt.title('NeuroGuard Training')
+    plt.figure(figsize=(10, 5))
+    df_h = pd.DataFrame(history)
+    plt.plot(df_h['episode'], df_h['reward'], marker='o', linestyle='-', color='b')
+    plt.title(f'NeuroGuard Training Performance ({dataset_size} Samples)')
+    plt.xlabel('Episode')
+    plt.ylabel('Total Reward')
+    plt.grid(True)
     plt.savefig(f"{ARTIFACTS_DIR}/training_curve.png")
     print("Training Complete. Model and Artifacts Saved.")
 
@@ -100,24 +125,23 @@ def demo_mode():
     env = NetworkEnv(features, labels)
     agent = DQNAgent(state_dim=env.n_features, action_dim=env.action_space.n)
     
-    # Load the trained model
     agent.model.load_state_dict(torch.load(MODEL_PATH))
-    agent.epsilon = 0.0 # Turn off exploration (Pure exploitation)
+    agent.epsilon = 0.0 
     
-    print("Model Loaded. Running Inference on 10 Random Samples...")
-    print(f"{'ID':<5} | {'Actual':<10} | {'Predicted':<10} | {'Result'}")
-    print("-" * 45)
+    print(f"{'ID':<8} | {'Actual':<10} | {'Predicted':<10} | {'Result'}")
+    print("-" * 50)
     
     correct = 0
-    for _ in range(10):
+    test_samples = 15 
+    for _ in range(test_samples):
         idx = random.randint(0, len(features)-1)
         state = features[idx]
         actual = labels[idx]
         
-        # Inference
         state_tensor = torch.FloatTensor(state).unsqueeze(0).to(agent.device)
-        q_values = agent.model(state_tensor)
-        action = torch.argmax(q_values).item()
+        with torch.no_grad():
+            q_values = agent.model(state_tensor)
+            action = torch.argmax(q_values).item()
         
         status = "✅ PASS" if action == actual else "❌ FAIL"
         if action == actual: correct += 1
@@ -125,13 +149,15 @@ def demo_mode():
         act_str = "Attack" if actual == 1 else "Normal"
         pred_str = "Block" if action == 1 else "Pass"
         
-        print(f"{idx:<5} | {act_str:<10} | {pred_str:<10} | {status}")
+        print(f"{idx:<8} | {act_str:<10} | {pred_str:<10} | {status}")
         
-    print("-" * 45)
-    print(f"Demo Accuracy: {correct}/10")
+    print("-" * 50)
+    print(f"Final Release Accuracy: {correct}/{test_samples} ({(correct/test_samples)*100:.1f}%)")
 
 if __name__ == "__main__":
     if "--demo" in sys.argv:
         demo_mode()
+    elif "--full" in sys.argv:
+        train_mode()
     else:
         train_mode()

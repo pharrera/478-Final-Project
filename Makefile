@@ -1,24 +1,27 @@
 # Variables
 IMAGE_NAME = neuroguard_dqn
-CONTAINER_NAME = neuroguard_dqn
 
-# Bootstrap: Build the container
+# Bootstrap
 bootstrap:
 	docker compose build
 
-# Run the training loop (This is "make up")
+# Fast Run (For Grading - < 5 mins)
 up:
 	docker compose up
 
-# Run the DEMO mode (This is "make demo")
+# Full Run (For Report - Uses all data)
+full_run:
+	docker compose run --rm neuroguard python src/main.py --full
+
+# Demo
 demo:
 	docker compose run --rm neuroguard python src/main.py --demo
 
-# Clean up
+# Clean
 clean:
 	docker compose down
 	docker system prune -f
 
-# Run Tests
+# Tests
 test:
 	docker compose run --rm neuroguard python src/tests.py
