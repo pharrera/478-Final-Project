@@ -1,4 +1,5 @@
-FROM python:3.9-slim
+# Use the official arm64 optimized image
+FROM --platform=linux/arm64 python:3.9-slim
 
 WORKDIR /app
 
