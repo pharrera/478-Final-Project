@@ -85,7 +85,7 @@ def train_mode():
         print(f">>> FULL TRAINING ON {ds_type.upper()} ({len(features)} Samples) <<<")
         limit = None
         # OPTIMIZATION 3: Increased episodes
-        episodes = 20 
+        episodes = 30 
         log_interval = 5000
     else:
         print(f">>> FAST MODE ON {ds_type.upper()} (2000 Samples) <<<")
