@@ -14,7 +14,7 @@ class NetworkEnv(gym.Env):
         self.current_step = 0
         self.max_steps = max_steps if max_steps else self.n_samples
 
-        self.action_space = spaces.Discrete(2) # 0=Pass, 1=Block
+        self.action_space = spaces.Discrete(2)
         self.n_features = data.shape[1]
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(self.n_features,), dtype=np.float32
@@ -33,11 +33,20 @@ class NetworkEnv(gym.Env):
         reward = 0
         
         if action == actual_label:
-            reward = 1
+            # OPTIMIZATION 1: Higher reward for catching attacks
+            if actual_label == 1:
+                reward = 2 # Catching an attack is worth more than passing normal traffic
+            else:
+                reward = 1
         else:
-            # SYMMETRIC PENALTY: To maximize Accuracy (Beat 99.42%)
-            # We punish both mistakes equally hard so the agent doesn't bias towards one.
-            reward = -10 
+            # OPTIMIZATION 2: "Paranoid" Penalties
+            # If we miss an attack (FN), massive penalty.
+            if action == 0 and actual_label == 1:
+                reward = -50 
+            # If we block normal traffic (FP), smaller penalty.
+            # We accept some false alarms to ensure we catch the zero-days.
+            elif action == 1 and actual_label == 0:
+                reward = -2 
 
         self.current_step += 1
         done = self.current_step >= self.max_steps - 1

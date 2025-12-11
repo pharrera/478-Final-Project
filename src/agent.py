@@ -16,27 +16,25 @@ class DuelingDQN(nn.Module):
     def __init__(self, input_dim, output_dim):
         super(DuelingDQN, self).__init__()
         
-        # Robust Feature Layer (prevents overfitting to KDD specifics)
+        # OPTIMIZATION 3: Higher Dropout (0.4) to force generalization
         self.feature_layer = nn.Sequential(
             nn.Linear(input_dim, 256),
             nn.BatchNorm1d(256),
             nn.ReLU(),
-            nn.Dropout(0.2), # Moderate dropout
+            nn.Dropout(0.4), # Increased from 0.2
             
             nn.Linear(256, 128),
             nn.BatchNorm1d(128),
             nn.ReLU(),
-            nn.Dropout(0.2)
+            nn.Dropout(0.4)  # Increased from 0.2
         )
         
-        # Value Stream
         self.value_stream = nn.Sequential(
             nn.Linear(128, 64),
             nn.ReLU(),
             nn.Linear(64, 1)
         )
         
-        # Advantage Stream
         self.advantage_stream = nn.Sequential(
             nn.Linear(128, 64),
             nn.ReLU(),
@@ -53,30 +51,30 @@ class DQNAgent:
     def __init__(self, state_dim, action_dim):
         self.state_dim = state_dim
         self.action_dim = action_dim
-        self.memory = deque(maxlen=5000) # Increased memory for full dataset
+        self.memory = deque(maxlen=10000) # Increased memory buffer
         self.gamma = 0.95    
         self.epsilon = 1.0   
         self.epsilon_min = 0.01
-        
-        # CRITICAL: Fast decay because we only step ONCE per episode
-        self.epsilon_decay = 0.90 
+        self.epsilon_decay = 0.90 # Fast decay
         
         self.learning_rate = 0.0005 
-        self.batch_size = 64 # Increased batch size for stability
+        self.batch_size = 64
         
         self.device = device
         self.model = DuelingDQN(state_dim, action_dim).to(self.device)
-        self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
+        
+        # OPTIMIZATION 4: Weight Decay (L2 Regularization) to prevent overfitting
+        self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate, weight_decay=1e-4)
+        
         self.criterion = nn.MSELoss()
 
     def act(self, state):
         if np.random.rand() <= self.epsilon:
             return random.randrange(self.action_dim)
         
-        # Fake batch for BatchNorm compatibility (requires >1 sample usually, or eval mode)
         state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
         
-        self.model.eval() # Important for BatchNorm/Dropout
+        self.model.eval()
         with torch.no_grad():
             q_values = self.model(state_tensor)
         self.model.train()
@@ -99,7 +97,6 @@ class DQNAgent:
         next_states = torch.FloatTensor(np.array(next_states)).to(self.device)
         dones = torch.FloatTensor(dones).to(self.device)
 
-        # Train mode enables Dropout/BN
         self.model.train()
         
         current_q = self.model(states).gather(1, actions).squeeze(1)
@@ -110,8 +107,6 @@ class DQNAgent:
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
-        
-        # Note: No decay here!
 
     def update_epsilon(self):
         if self.epsilon > self.epsilon_min:
