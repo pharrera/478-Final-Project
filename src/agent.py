@@ -16,25 +16,27 @@ class DuelingDQN(nn.Module):
     def __init__(self, input_dim, output_dim):
         super(DuelingDQN, self).__init__()
         
-        # OPTIMIZATION 3: Higher Dropout (0.4) to force generalization
+        # Robust Feature Layer with Batch Norm and Dropout
         self.feature_layer = nn.Sequential(
             nn.Linear(input_dim, 256),
             nn.BatchNorm1d(256),
             nn.ReLU(),
-            nn.Dropout(0.4), # Increased from 0.2
+            nn.Dropout(0.2), # Tuned to 0.3 for stability
             
             nn.Linear(256, 128),
             nn.BatchNorm1d(128),
             nn.ReLU(),
-            nn.Dropout(0.4)  # Increased from 0.2
+            nn.Dropout(0.2)
         )
         
+        # Value Stream
         self.value_stream = nn.Sequential(
             nn.Linear(128, 64),
             nn.ReLU(),
             nn.Linear(64, 1)
         )
         
+        # Advantage Stream
         self.advantage_stream = nn.Sequential(
             nn.Linear(128, 64),
             nn.ReLU(),
@@ -51,21 +53,29 @@ class DQNAgent:
     def __init__(self, state_dim, action_dim):
         self.state_dim = state_dim
         self.action_dim = action_dim
-        self.memory = deque(maxlen=10000) # Increased memory buffer
-        self.gamma = 0.95    
+        self.memory = deque(maxlen=20000) # Buffer size from paper
+        
+        # OPTIMIZATION: Paper uses Gamma 0.99
+        self.gamma = 0.99    
         self.epsilon = 1.0   
         self.epsilon_min = 0.01
-        self.epsilon_decay = 0.90 # Fast decay
+        self.epsilon_decay = 0.95 # Adjusted for 100 episodes
         
-        self.learning_rate = 0.0005 
+        self.learning_rate = 0.0001 
         self.batch_size = 64
+        self.tau = 0.01 # Soft Update Factor
         
         self.device = device
+        
+        # 1. Main Model (Trainable)
         self.model = DuelingDQN(state_dim, action_dim).to(self.device)
         
-        # OPTIMIZATION 4: Weight Decay (L2 Regularization) to prevent overfitting
-        self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate, weight_decay=1e-4)
+        # 2. Target Model (Stable) - CRITICAL FOR CONVERGENCE
+        self.target_model = DuelingDQN(state_dim, action_dim).to(self.device)
+        self.target_model.load_state_dict(self.model.state_dict())
+        self.target_model.eval() # Never train directly
         
+        self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate, weight_decay=1e-4)
         self.criterion = nn.MSELoss()
 
     def act(self, state):
@@ -74,7 +84,7 @@ class DQNAgent:
         
         state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
         
-        self.model.eval()
+        self.model.eval() # Batch Norm requires eval mode for single samples
         with torch.no_grad():
             q_values = self.model(state_tensor)
         self.model.train()
@@ -83,6 +93,13 @@ class DQNAgent:
 
     def remember(self, state, action, reward, next_state, done):
         self.memory.append((state, action, reward, next_state, done))
+
+    def soft_update(self):
+        """
+        Soft update: target_weights = τ * local_weights + (1 - τ) * target_weights
+        """
+        for target_param, local_param in zip(self.target_model.parameters(), self.model.parameters()):
+            target_param.data.copy_(self.tau * local_param.data + (1.0 - self.tau) * target_param.data)
 
     def replay(self):
         if len(self.memory) < self.batch_size:
@@ -99,14 +116,24 @@ class DQNAgent:
 
         self.model.train()
         
+        # Current Q from Main Model
         current_q = self.model(states).gather(1, actions).squeeze(1)
-        next_q = self.model(next_states).max(1)[0].detach()
+        
+        # Next Q from TARGET Model (Stable)
+        with torch.no_grad():
+            next_q = self.target_model(next_states).max(1)[0]
+        
         expected_q = rewards + (self.gamma * next_q * (1 - dones))
         
         loss = self.criterion(current_q, expected_q)
         self.optimizer.zero_grad()
         loss.backward()
+
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+
         self.optimizer.step()
+        # Perform Soft Update
+        self.soft_update()
 
     def update_epsilon(self):
         if self.epsilon > self.epsilon_min:

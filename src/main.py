@@ -105,9 +105,9 @@ def train_mode():
     if "--full" in sys.argv:
         print(f">>> FULL TRAINING ON {ds_type.upper()} ({len(X_train)} Samples) <<<")
         limit = None
-        # OPTIMIZATION: 40 Episodes is enough with aggressive decay
-        episodes = 40
-        log_interval = 500 # Faster updates
+        # OPTIMIZATION: 150 Episodes for Deep Convergence
+        episodes = 150
+        log_interval = 5000 
     else:
         print(f">>> FAST MODE ON {ds_type.upper()} (2000 Samples) <<<")
         limit = 2000
@@ -123,7 +123,7 @@ def train_mode():
     latent_dim = 20
     print(f"Input Features: {input_dim} -> Latent: {latent_dim}")
     
-    X_encoded, ae_model = train_autoencoder(X_train, input_dim, latent_dim, epochs=10)
+    X_encoded, ae_model = train_autoencoder(X_train, input_dim, latent_dim, epochs=1000)
     torch.save(ae_model.state_dict(), AE_PATH)
     
     # 2. Train DQN

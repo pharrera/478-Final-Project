@@ -33,24 +33,17 @@ class NetworkEnv(gym.Env):
         reward = 0
         
         if action == actual_label:
-            # OPTIMIZATION 1: Higher reward for catching attacks
             if actual_label == 1:
-                reward = 2 # Catching an attack is worth more than passing normal traffic
+                reward = 10  # HUGE reward for catching an attack (Incentive > Fear)
             else:
-                reward = 1
+                reward = 1   # Standard reward for passing normal traffic
         else:
-            # OPTIMIZATION 2: "Paranoid" Penalties
-            # If we miss an attack (FN), massive penalty.
-            if action == 0 and actual_label == 1:
-                reward = -50 
-            # If we block normal traffic (FP), smaller penalty.
-            # We accept some false alarms to ensure we catch the zero-days.
-            elif action == 1 and actual_label == 0:
-                reward = -2 
+            # Symmetrical Penalty -10
+            # This forces the agent to value Accuracy above all else.
+            # It treats False Positives and False Negatives as equally bad failures.
+            reward = -10 
 
         self.current_step += 1
         done = self.current_step >= self.max_steps - 1
-        
         obs = self._next_observation() if not done else np.zeros(self.n_features)
-        
         return obs, reward, done, {}
