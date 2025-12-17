@@ -34,16 +34,14 @@ class NetworkEnv(gym.Env):
         
         if action == actual_label:
             if actual_label == 1:
-                reward = 10  # HUGE reward for catching an attack (Incentive > Fear)
+                reward = 10 # Incentive for catching attack
             else:
-                reward = 1   # Standard reward for passing normal traffic
+                reward = 1
         else:
-            # Symmetrical Penalty -10
-            # This forces the agent to value Accuracy above all else.
-            # It treats False Positives and False Negatives as equally bad failures.
-            reward = -10 
+            reward = -10 # Symmetrical penalty
 
         self.current_step += 1
         done = self.current_step >= self.max_steps - 1
+        
         obs = self._next_observation() if not done else np.zeros(self.n_features)
         return obs, reward, done, {}

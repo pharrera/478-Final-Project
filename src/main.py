@@ -22,18 +22,15 @@ DATA_PATH_TEST = "data/KDDTest+.csv"
 DATA_PATH_CIC = "data/ciciot2023.csv"
 
 ARTIFACTS_DIR = "artifacts/release"
-DQN_PATH = f"{ARTIFACTS_DIR}/dqn_model.pth"
-AE_PATH = f"{ARTIFACTS_DIR}/ae_model.pth"
-
 os.makedirs("data", exist_ok=True)
 os.makedirs(ARTIFACTS_DIR, exist_ok=True)
 
+def get_model_paths(ds_type):
+    """Returns dataset-specific paths to avoid dimension mismatch errors."""
+    return (f"{ARTIFACTS_DIR}/dqn_model_{ds_type}.pth", 
+            f"{ARTIFACTS_DIR}/ae_model_{ds_type}.pth")
+
 def load_data(mode="train", dataset_type="kdd"):
-    """
-    Universal Loader.
-    mode: 'train' or 'test' (Only matters for KDD)
-    dataset_type: 'kdd' (Default) or 'ciciot'
-    """
     X_raw = None
     y = None
 
@@ -41,28 +38,22 @@ def load_data(mode="train", dataset_type="kdd"):
         print(f"Loading CICIoT2023 from {DATA_PATH_CIC}...")
         if not os.path.exists(DATA_PATH_CIC):
             print(f"ERROR: {DATA_PATH_CIC} not found.")
-            print("Please download a part-file from Kaggle/UNB, rename to ciciot2023.csv, and place in data/.")
             sys.exit(1)
-            
-        # CICIoT2023 Load Logic
         df = pd.read_csv(DATA_PATH_CIC)
+        # CICIoT labels are strings, map them
         y_raw = df['label']
         y = y_raw.apply(lambda x: 0 if x in ['BenignTraffic', 'Benign'] else 1).values
         X_raw = df.drop(['label'], axis=1)
         
     else:
-        # NSL-KDD Load Logic (Default)
         path = DATA_PATH_TRAIN if mode == "train" else DATA_PATH_TEST
         url = TRAIN_URL if mode == "train" else TEST_URL
-        
         if not os.path.exists(path):
             print(f"Downloading {mode.upper()} set from {url}...")
-            response = requests.get(url)
             with open(path, 'wb') as f:
-                f.write(response.content)
-        
+                f.write(requests.get(url).content)
         print(f"Loading {mode.upper()} data from {path}...")
-        cols = ["duration","protocol_type","service","flag","src_bytes","dst_bytes",
+        df = pd.read_csv(path, names=["duration","protocol_type","service","flag","src_bytes","dst_bytes",
                 "land","wrong_fragment","urgent","hot","num_failed_logins",
                 "logged_in","num_compromised","root_shell","su_attempted",
                 "num_root","num_file_creations","num_shells","num_access_files",
@@ -73,19 +64,14 @@ def load_data(mode="train", dataset_type="kdd"):
                 "dst_host_diff_srv_rate","dst_host_same_src_port_rate",
                 "dst_host_srv_diff_host_rate","dst_host_serror_rate",
                 "dst_host_srv_serror_rate","dst_host_rerror_rate",
-                "dst_host_srv_rerror_rate","label","difficulty"]
-                
-        df = pd.read_csv(path, names=cols)
+                "dst_host_srv_rerror_rate","label","difficulty"])
         y = df['label'].apply(lambda x: 0 if x == 'normal' else 1).values
         X_raw = df.drop(['label', 'difficulty'], axis=1)
 
-    # Universal Preprocessing (Encoding & Scaling)
     if X_raw is not None:
         le = LabelEncoder()
         for col in X_raw.select_dtypes(include=['object']).columns:
             X_raw[col] = le.fit_transform(X_raw[col].astype(str))
-            
-        # OPTIMIZATION: Use StandardScaler (Z-Score) per paper specs
         scaler = StandardScaler()
         X = scaler.fit_transform(X_raw)
         return X, y
@@ -94,22 +80,18 @@ def load_data(mode="train", dataset_type="kdd"):
         sys.exit(1)
 
 def train_mode():
-    # Detect Dataset Flag
     ds_type = "ciciot" if "--ciciot" in sys.argv else "kdd"
+    dqn_path, ae_path = get_model_paths(ds_type)
     
-    # LOAD TRAINING DATA ONLY
     print(f"Loading Training Data for {ds_type}...")
     X_train, y_train = load_data("train", ds_type)
     
-    # Configuration
     if "--full" in sys.argv:
         print(f">>> FULL TRAINING ON {ds_type.upper()} ({len(X_train)} Samples) <<<")
         limit = None
-        # OPTIMIZATION: 150 Episodes for Deep Convergence
-        episodes = 150
+        episodes = 20 # Configured for 20 episodes
         log_interval = 5000 
     else:
-        print(f">>> FAST MODE ON {ds_type.upper()} (2000 Samples) <<<")
         limit = 2000
         episodes = 3
         log_interval = 200
@@ -120,11 +102,12 @@ def train_mode():
     
     # 1. Train Autoencoder
     input_dim = X_train.shape[1]
-    latent_dim = 20
+    latent_dim = 32
     print(f"Input Features: {input_dim} -> Latent: {latent_dim}")
     
-    X_encoded, ae_model = train_autoencoder(X_train, input_dim, latent_dim, epochs=1000)
-    torch.save(ae_model.state_dict(), AE_PATH)
+    X_encoded, ae_model = train_autoencoder(X_train, input_dim, latent_dim, epochs=200)
+    torch.save(ae_model.state_dict(), ae_path)
+    print(f"Saved AE model to {ae_path}")
     
     # 2. Train DQN
     env = NetworkEnv(X_encoded, y_train)
@@ -133,7 +116,7 @@ def train_mode():
     history = [] 
     print(f"--- STARTING HYBRID TRAINING ({episodes} Episodes) ---")
     
-    train_freq = 4 # Speed up training by 4x
+    train_freq = 4 
 
     for e in range(episodes):
         state = env.reset()
@@ -149,58 +132,59 @@ def train_mode():
             total_reward += reward
             
             step_count += 1
-            
-            # Train only every 4 steps (Standard DQN practice)
             if step_count % train_freq == 0:
-                agent.replay() # No decay inside
+                agent.replay() 
             
             if step_count % log_interval == 0:
                 print(f"[Ep {e+1}] Step {step_count} | Reward: {total_reward} | Eps: {agent.epsilon:.4f}")
                 sys.stdout.flush()
         
-        # Decay ONCE per episode
         agent.update_epsilon()
         
         print(f"--- Episode {e+1}/{episodes} Finished | Score: {total_reward} | Eps: {agent.epsilon:.4f} ---")
         history.append({"episode": e + 1, "reward": total_reward})
 
-    torch.save(agent.model.state_dict(), DQN_PATH)
-    pd.DataFrame(history).to_csv(f"{ARTIFACTS_DIR}/metrics.csv", index=False)
+        if (e + 1) % 10 == 0:
+            torch.save(agent.model.state_dict(), f"{ARTIFACTS_DIR}/dqn_checkpoint_{ds_type}_ep{e+1}.pth")
+
+    torch.save(agent.model.state_dict(), dqn_path)
+    print(f"Saved DQN model to {dqn_path}")
+    pd.DataFrame(history).to_csv(f"{ARTIFACTS_DIR}/metrics_{ds_type}.csv", index=False)
     
     # Generate Learning Curve
     df_h = pd.DataFrame(history)
     plt.figure(figsize=(10,5))
     plt.plot(df_h['episode'], df_h['reward'], marker='o')
     plt.title(f'NeuroGuard Training Curve ({ds_type.upper()})')
-    plt.xlabel('Episodes')
-    plt.ylabel('Total Reward')
-    plt.grid(True)
-    plt.savefig(f"{ARTIFACTS_DIR}/training_curve.png")
-    print("Training Complete. Models Saved.")
+    plt.savefig(f"{ARTIFACTS_DIR}/training_curve_{ds_type}.png")
+    print("Training Complete.")
 
 def benchmark_mode():
     print("\n--- BENCHMARK (VALIDATION) ---")
     ds_type = "ciciot" if "--ciciot" in sys.argv else "kdd"
+    dqn_path, ae_path = get_model_paths(ds_type)
     
     # Load Test Data
     X_test_raw, y_test = load_data("test", ds_type)
     
     device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
     
-    # Load Models
-    if not os.path.exists(AE_PATH):
-        print("Error: AE Model not found.")
+    # Validate Model Existence
+    if not os.path.exists(ae_path):
+        print(f"Error: AE Model for {ds_type} not found at {ae_path}.")
+        print(f"Run 'python src/main.py --full --{ds_type}' first to train.")
         return
 
     # Dynamic input dim based on dataset
-    ae_model = AutoEncoder(X_test_raw.shape[1], 20).to(device)
-    ae_model.load_state_dict(torch.load(AE_PATH, map_location=device))
+    latent_dim = 32
+    input_dim = X_test_raw.shape[1]
+    
+    ae_model = AutoEncoder(input_dim, latent_dim).to(device)
+    ae_model.load_state_dict(torch.load(ae_path, map_location=device))
     ae_model.eval()
     
-    agent = DQNAgent(state_dim=20, action_dim=2)
-    agent.model.load_state_dict(torch.load(DQN_PATH, map_location=device))
-    
-    # Force Eval Mode for BatchNorm/Dropout
+    agent = DQNAgent(state_dim=latent_dim, action_dim=2)
+    agent.model.load_state_dict(torch.load(dqn_path, map_location=device))
     agent.model.eval()
     agent.epsilon = 0.0 
     
@@ -209,7 +193,6 @@ def benchmark_mode():
     
     start_time = time.time()
     
-    # Inference Loop
     for i in range(len(X_test_raw)):
         raw_tensor = torch.FloatTensor(X_test_raw[i]).unsqueeze(0).to(device)
         with torch.no_grad():
@@ -247,7 +230,6 @@ def benchmark_mode():
     print(f" FN: {cm[1][0]} | TP: {cm[1][1]}")
     print("="*40)
     
-    # Save validation report
     with open(f"{ARTIFACTS_DIR}/validation_report_{ds_type}.txt", "w") as f:
         f.write(f"Accuracy: {acc}\nPrecision: {prec}\nRecall: {rec}\nF1: {f1}")
 
